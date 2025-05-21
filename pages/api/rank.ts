@@ -1,9 +1,16 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import OpenAI from "openai";
+import pdf from "pdf-parse";
 
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY, // pull from .env or Vercel
-});
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+
+export const config = {
+  api: {
+    bodyParser: {
+      sizeLimit: "16mb", // bump if you expect larger files
+    },
+  },
+};
 
 export default async function handler(
   req: NextApiRequest,
@@ -11,39 +18,55 @@ export default async function handler(
 ) {
   if (req.method !== "POST") return res.status(405).end();
 
-  const { resumeText, jobDescription } = req.body;
-  if (!resumeText || !jobDescription)
-    return res.status(400).json({ error: "Missing fields" });
+  const { resumeText, pdfBase64, jobDescription } = req.body || {};
+  if (!jobDescription) {
+    return res.status(400).json({ error: "Missing job description" });
+  }
 
-  const prompt = `
-Compare the following résumé to the job description and output ONLY a single number 0-100 indicating fit score.
+  let text: string = resumeText ?? "";
 
-Résumé:
-${resumeText}
+  // If we got a PDF, extract plaintext
+  if (!text && pdfBase64) {
+    try {
+      const pdfBuf = Buffer.from(pdfBase64, "base64");
+      text = (await pdf(pdfBuf)).text;
+    } catch (err) {
+      console.error("PDF parse error", err);
+      return res.status(400).json({ error: "Failed to parse PDF" });
+    }
+  }
 
-Job:
-${jobDescription}
+  if (!text) {
+    return res.status(400).json({ error: "Missing résumé text" });
+  }
 
-Number:
-`;
+  // Trim to keep context under model limit (~8k tokens)
+  const safeResume = text.slice(0, 20000);
 
   try {
     const chat = await openai.chat.completions.create({
-      model: "gpt-4o-mini",         // cheap & strong; use "gpt-4o" if you like
+      model: "gpt-3.5-turbo-0125", // cheaper for demo
       messages: [
-        { role: "system", content: "You are an expert technical recruiter." },
-        { role: "user", content: prompt },
+        {
+          role: "system",
+          content: "You are an expert recruiter. Return only a number 0-100.",
+        },
+        {
+          role: "user",
+          content: `Résumé:\n${safeResume}\nJob:\n${jobDescription}`,
+        },
       ],
       max_tokens: 5,
       temperature: 0.2,
     });
 
-    const scoreRaw = chat.choices[0].message.content?.trim() ?? "0";
-    const score = parseInt(scoreRaw.replace(/[^0-9]/g, ""), 10) || 0;
-
-    res.json({ score });
+    const num = parseInt(
+      chat.choices[0].message.content?.replace(/[^0-9]/g, "") || "0",
+      10
+    );
+    res.json({ score: num });
   } catch (err: any) {
     console.error(err);
-    res.status(500).json({ error: "OpenAI request failed" });
+    res.status(500).json({ error: err.message || "OpenAI error" });
   }
 }
