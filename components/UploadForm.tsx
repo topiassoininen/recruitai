@@ -2,6 +2,7 @@
 
 import { useRef, useState } from "react";
 
+/** Shape of the object Dashboard expects back */
 interface CandidateScored {
   id: string;
   name: string;
@@ -19,26 +20,39 @@ export default function UploadForm({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  /** Convert File → either { pdfBase64 } or { resumeText }  */
   async function fileToPayload(file: File) {
     if (file.type === "application/pdf") {
-      // Read PDF as base‑64 so backend can parse it with pdf‑parse
       const buf = await file.arrayBuffer();
-      const b64 = btoa(String.fromCharCode(...new Uint8Array(buf)));
+      const bytes = new Uint8Array(buf);
+
+      // Convert to binary string without using spread operator
+      let binary = "";
+      bytes.forEach((b) => (binary += String.fromCharCode(b)));
+
+      const b64 = btoa(binary);
       return { pdfBase64: b64 };
     }
-    // fallback: treat anything else as plain text (txt, md, etc.)
+
+    // Fallback: treat anything else as plain text
     const text = await file.text();
     return { resumeText: text };
   }
 
   async function handleUpload() {
     if (!selectedFile) return;
+
     setLoading(true);
     setError(null);
 
     try {
-      const payload = await fileToPayload(selectedFile);
-      payload.jobDescription = `Senior Full‑Stack Engineer (React / Node)\n• 5+ yrs TypeScript\n• AWS experience`;
+      const basePayload = await fileToPayload(selectedFile);
+
+      const payload = {
+        ...basePayload,
+        jobDescription:
+          "Senior Full-Stack Engineer (React / Node)\n• 5+ yrs TypeScript\n• AWS experience",
+      };
 
       const res = await fetch("/api/rank", {
         method: "POST",
